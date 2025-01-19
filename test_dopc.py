@@ -21,7 +21,7 @@ class TestDOPCHTTP(unittest.TestCase):
 
     def test_invalid_venue_slug(self):
         params = {
-            "venue_slug": "invalid-venue",
+            "venue_slug": "YanShengheng",
             "cart_value": 1000,
             "user_lat": 60.17094,
             "user_lon": 24.93087
