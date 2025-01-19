@@ -1,34 +1,14 @@
-from flask import Flask, request, jsonify
 import requests
-from geopy.distance import geodesic
-
-#Test json module 
-import json
-
-
-app = Flask(__name__)
+from math import radians, sin, cos, sqrt, atan2
 
 
 class DOPC:
-    def __init__(self, app, home_assignment_api = "https://consumer-api.development.dev.woltapi.com/home-assignment-api/v1/venues"):
+    def __init__(self,home_assignment_api = "https://consumer-api.development.dev.woltapi.com/home-assignment-api/v1/venues"):
         self.home_assignment_api = home_assignment_api
-        self.app = app
-        self.register_routes()
-
-
-    def register_routes(self):
-        self.app.add_url_rule(
-            '/api/v1/delivery-order-price', 
-            view_func=self.get_delivery_order_price, 
-            methods=['GET']
-        )
 
     def fetch_venue_data(self, venue_slug):
-        """Fetch static and dynamic data for a given venue."""
-        print("this is home api", self.home_assignment_api)
         static_url = f"{self.home_assignment_api}/{venue_slug}/static"
         dynamic_url = f"{self.home_assignment_api}/{venue_slug}/dynamic"
-        print("this is url" ,static_url)
         static_response = requests.get(static_url)
         dynamic_response = requests.get(dynamic_url)
         
@@ -37,15 +17,47 @@ class DOPC:
         
         return static_response.json(), dynamic_response.json()
     
-    def calculate_delivery_distance(self,user_coords, venue_coords):
-        """Calculate the straight-line distance between user and venue."""
-        return geodesic(user_coords, venue_coords).meters
+    """
+    small_order_surcharge is the difference between order_minimum_no_surcharge 
+    (as received from the Home Assignment API) and the cart value. 
+    For example, if the cart value is 800 and order_minimum_no_surcharge is 1000, then the small_order_surcharge is 200. 
+    small_order_surcharge can't be negative.
+    """
+    def get_small_order_surcharge (self,order_minimum_no_surcharge, cart_value):
+        return (order_minimum_no_surcharge - cart_value) if cart_value < order_minimum_no_surcharge else 0
+        
+    # Straight-line formula
+    def _straight_line(self, lat1, lon1, lat2, lon2):
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        delta_lat = lat2 - lat1
+        delta_lon = (lon2 - lon1) * cos((lat1 + lat2) / 2)  # Scale longitude by latitude
+        return sqrt(delta_lat**2 + delta_lon**2) * 6371000
 
-    def calculate_delivery_fee(self,distance, delivery_pricing):
-        """Calculate the delivery fee based on distance and pricing rules."""
-        print("this is distance", distance)
-        print("this is delivery_pricing", delivery_pricing)
+    # Haversine formula, apparently 1 degree latitude is about 111 km
+    def _haversine(lat1, lon1, lat2, lon2):
+        R = 6371000  # Earth radius in meters
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        delta_lat = lat2 - lat1
+        delta_lon = lon2 - lon1
+        a = sin(delta_lat / 2)**2 + cos(lat1) * cos(lat2) * sin(delta_lon / 2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return R * c
 
+    """
+    Delivery distance is the straight line distance between the user's and venue's locations.
+    Note that it's straight line distance, you don't need to figure out what's the distance via public roads. 
+    The exact algorithm doesn't matter as long as it's a decent approximation of a straight line distance.
+    """
+    def get_delivery_distance(self,user_coords, venue_coords):
+        user_lat, user_lon = user_coords
+        venue_lat, venue_lon = venue_coords
+        return self._straight_line(user_lat, user_lon, venue_lat, venue_lon)
+
+    """
+    Delivery fee can be calculated with: 
+    base_price + a + b * distance / 10. 
+    """
+    def get_delivery_fee(self,distance, delivery_pricing):
         base_price = delivery_pricing['base_price']
         for range_info in delivery_pricing['distance_ranges']:
             min_dist = range_info['min']
@@ -57,42 +69,41 @@ class DOPC:
                 return base_price + a + distance_component
         return None  # Delivery not available for this distance
 
-    def get_delivery_order_price(self):
-        # Extract query parameters
-        venue_slug = request.args.get('venue_slug')
-        cart_value = int(request.args.get('cart_value'))
-        user_lat = float(request.args.get('user_lat'))
-        user_lon = float(request.args.get('user_lon'))
+    """
+    Total price is the sum of cart value, small order surcharge, and delivery fee.
+    """
+    def get_total_price(self, cart_value, delivery_fee, small_order_surcharge):
+        return cart_value + delivery_fee + small_order_surcharge
+
+    """
+    The DOPC service provide a single endpoint: GET /api/v1/delivery-order-price, which takes the following as query parameters (all are required):
+    venue_slug (string): The unique identifier (slug) for the venue from which the delivery order will be placed
+    cart_value: (integer): The total value of the items in the shopping cart
+    user_lat (number with decimal point): The latitude of the user's location
+    user_lon (number with decimal point): The longitude of the user's location
+    """
+    def get_delivery_order_price(self,venue_slug:str, cart_value:int, user_lat:float, user_lon:float):
         
         # Fetch venue data
         static_data, dynamic_data = self.fetch_venue_data(venue_slug)
         if not static_data or not dynamic_data:
-            return jsonify({"error": "Venue data not found"}), 404
-        
-        # print("this is static_data", static_data)
-        with open("data.json", "w") as json_file:
-            json.dump(dynamic_data, json_file)
-        print("json_list written to JSON file as a list.")
+            return {"error": "Venue data not found"}, 404
 
-        # Extract venue coordinates
         venue_coords = tuple(static_data['venue_raw']['location']['coordinates'][::-1])  # [lon, lat] to (lat, lon)
         user_coords = (user_lat, user_lon)
-        
-        # Calculate delivery distance
-        delivery_distance = self.calculate_delivery_distance(user_coords, venue_coords)
-        
-        # Calculate delivery fee
-        delivery_pricing = dynamic_data['venue_raw']['delivery_specs']['delivery_pricing']
-        delivery_fee = self.calculate_delivery_fee(delivery_distance, delivery_pricing)
+        delivery_specs = dynamic_data['venue_raw']['delivery_specs']
+        order_minimum_no_surcharge = delivery_specs['order_minimum_no_surcharge']
+        delivery_pricing = delivery_specs['delivery_pricing']
+
+        delivery_distance = self.get_delivery_distance(user_coords, venue_coords)
+        delivery_fee = self.get_delivery_fee(delivery_distance, delivery_pricing)
+        #check the delivery availablity 
         if delivery_fee is None:
-            return jsonify({"error": "Delivery not available for this distance"}), 400
-        
-        # Calculate small order surcharge
-        order_minimum_no_surcharge = dynamic_data['venue_raw']['delivery_specs']['order_minimum_no_surcharge']
-        small_order_surcharge = (order_minimum_no_surcharge - cart_value) if cart_value < order_minimum_no_surcharge else 0
-        
+            return {"error": "Delivery not available for this distance"}, 400
+    
+        small_order_surcharge = self.get_small_order_surcharge(order_minimum_no_surcharge, cart_value)
         # Calculate total price
-        total_price = cart_value + delivery_fee + small_order_surcharge
+        total_price = self.get_total_price(cart_value, delivery_fee, small_order_surcharge)
         
         # Construct response
         response = {
@@ -105,10 +116,5 @@ class DOPC:
             }
         }
         
-        return jsonify(response)
+        return response, 200
     
-
-DOPC(app)
-
-if __name__ == '__main__':
-    app.run(debug=True)
