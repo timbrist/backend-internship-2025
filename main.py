@@ -2,6 +2,10 @@ from flask import Flask, request, jsonify
 import requests
 from geopy.distance import geodesic
 
+#Test json module 
+import json
+
+
 app = Flask(__name__)
 
 # Constants
@@ -28,13 +32,16 @@ def calculate_delivery_distance(user_coords, venue_coords):
 
 def calculate_delivery_fee(distance, delivery_pricing):
     """Calculate the delivery fee based on distance and pricing rules."""
+    print("this is distance", distance)
+    print("this is delivery_pricing", delivery_pricing)
+
     base_price = delivery_pricing['base_price']
     for range_info in delivery_pricing['distance_ranges']:
         min_dist = range_info['min']
         max_dist = range_info['max']
         if min_dist <= distance < max_dist or max_dist == 0:
-            a = range_info['price']['a']
-            b = range_info['price']['b']
+            a = range_info['a']
+            b = range_info['b']
             distance_component = round(b * distance / 10)
             return base_price + a + distance_component
     return None  # Delivery not available for this distance
@@ -52,21 +59,26 @@ def get_delivery_order_price():
     if not static_data or not dynamic_data:
         return jsonify({"error": "Venue data not found"}), 404
     
+    # print("this is static_data", static_data)
+    with open("data.json", "w") as json_file:
+        json.dump(dynamic_data, json_file)
+    print("json_list written to JSON file as a list.")
+
     # Extract venue coordinates
-    venue_coords = tuple(static_data['location']['coordinates'][::-1])  # [lon, lat] to (lat, lon)
+    venue_coords = tuple(static_data['venue_raw']['location']['coordinates'][::-1])  # [lon, lat] to (lat, lon)
     user_coords = (user_lat, user_lon)
     
     # Calculate delivery distance
     delivery_distance = calculate_delivery_distance(user_coords, venue_coords)
     
     # Calculate delivery fee
-    delivery_pricing = dynamic_data['delivery_specs']['delivery_pricing']
+    delivery_pricing = dynamic_data['venue_raw']['delivery_specs']['delivery_pricing']
     delivery_fee = calculate_delivery_fee(delivery_distance, delivery_pricing)
     if delivery_fee is None:
         return jsonify({"error": "Delivery not available for this distance"}), 400
     
     # Calculate small order surcharge
-    order_minimum_no_surcharge = dynamic_data['delivery_specs']['order_minimum_no_surcharge']
+    order_minimum_no_surcharge = dynamic_data['venue_raw']['delivery_specs']['order_minimum_no_surcharge']
     small_order_surcharge = SMALL_ORDER_SURCHARGE if cart_value < order_minimum_no_surcharge else 0
     
     # Calculate total price
