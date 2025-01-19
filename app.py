@@ -21,4 +21,4 @@ def delivery_order_price():
         return jsonify({"error": "Invalid input parameters"}), 400
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True,port=8000)

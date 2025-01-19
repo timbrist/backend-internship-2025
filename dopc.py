@@ -34,7 +34,7 @@ class DOPC:
         return sqrt(delta_lat**2 + delta_lon**2) * 6371000
 
     # Haversine formula, apparently 1 degree latitude is about 111 km
-    def _haversine(lat1, lon1, lat2, lon2):
+    def _haversine(self,lat1, lon1, lat2, lon2):
         R = 6371000  # Earth radius in meters
         lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
         delta_lat = lat2 - lat1
@@ -62,7 +62,8 @@ class DOPC:
         for range_info in delivery_pricing['distance_ranges']:
             min_dist = range_info['min']
             max_dist = range_info['max']
-            if min_dist <= distance < max_dist or max_dist == 0:
+            print("distance is ", distance)
+            if min_dist <= distance < max_dist and max_dist != 0:
                 a = range_info['a']
                 b = range_info['b']
                 distance_component = round(b * distance / 10)
@@ -97,6 +98,7 @@ class DOPC:
 
         delivery_distance = self.get_delivery_distance(user_coords, venue_coords)
         delivery_fee = self.get_delivery_fee(delivery_distance, delivery_pricing)
+        print("delivery_fee is ", delivery_distance)
         #check the delivery availablity 
         if delivery_fee is None:
             return {"error": "Delivery not available for this distance"}, 400
